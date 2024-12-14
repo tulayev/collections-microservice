@@ -4,6 +4,8 @@ using System.Security.Claims;
 using Auth.API.Models;
 using Microsoft.EntityFrameworkCore;
 using Auth.API.Constants;
+using Auth.API.Services.ImageHandler;
+using Auth.API.Data;
 
 namespace Auth.API.Account.RegisterUser
 {
@@ -23,25 +25,25 @@ namespace Auth.API.Account.RegisterUser
     {
         private readonly UserManager<User> _userManager;
         private readonly RoleManager<IdentityRole> _roleManager;
-        private readonly IFileHandler _fileHandler;
-        private readonly AppDbContext _db;
+        private readonly IImageService _imageService;
+        private readonly ApplicationDbContext _db;
 
         public RegisterUserCommandHandler(
             UserManager<User> userManager,
             RoleManager<IdentityRole> roleManager,
-            IFileHandler fileHandler,
-            AppDbContext db)
+            IImageService imageService,
+            ApplicationDbContext db)
         {
             _userManager = userManager;
             _roleManager = roleManager;
-            _fileHandler = fileHandler;
+            _imageService = imageService;
             _db = db;
         }
 
         public async Task<RegisterUserResult> Handle(RegisterUserCommand request, CancellationToken cancellationToken)
         {
             // Process image
-            var (file, imageClaim) = await ProcessImageAsync(request.Image, cancellationToken);
+            var (image, imageClaim) = await ProcessImageAsync(request.Image, cancellationToken);
 
             // Create user
             var user = new User
@@ -49,7 +51,7 @@ namespace Auth.API.Account.RegisterUser
                 Name = request.Name,
                 UserName = request.Email,
                 Email = request.Email,
-                FileId = file?.Id
+                ImageId = image?.Id
             };
 
             var result = await CreateUserAsync(user, request.Password, imageClaim);
@@ -73,28 +75,28 @@ namespace Auth.API.Account.RegisterUser
             return new RegisterUserResult(Success: true, Errors: []);
         }
 
-        private async Task<(AppFile File, Claim ImageClaim)> ProcessImageAsync(IFormFile image, CancellationToken cancellationToken)
+        private async Task<(Image Image, Claim ImageClaim)> ProcessImageAsync(IFormFile imageToUpload, CancellationToken cancellationToken)
         {
-            if (image == null)
+            if (imageToUpload == null)
             {
                 return (null, null);
             }
 
-            var filename = await _fileHandler.UploadAsync(image);
+            var result = await _imageService.UploadImageAsync(imageToUpload);
 
-            var file = new AppFile
+            var image = new Image
             {
-                Name = filename,
-                Path = _fileHandler.GeneratePath(filename)
+                Url = result.SecureUrl.AbsoluteUri,
+                PublicId = result.PublicId
             };
 
-            _db.Files.Add(file);
+            _db.Images.Add(image);
             
             await _db.SaveChangesAsync(cancellationToken);
 
-            var imageClaim = new Claim("Image", file.S3Path);
+            var imageClaim = new Claim("Image", image.Url);
             
-            return (file, imageClaim);
+            return (image, imageClaim);
         }
 
         private async Task<IdentityResult> CreateUserAsync(User user, string password, Claim imageClaim)
